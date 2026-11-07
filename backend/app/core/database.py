@@ -13,14 +13,12 @@ class Base(DeclarativeBase):
     pass
 
 
-# Asynchronous database engine using asyncpg
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=False,
     pool_pre_ping=True,
 )
 
-# Async session factory
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,

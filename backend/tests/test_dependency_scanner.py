@@ -34,7 +34,6 @@ def test_parse_requirements_txt():
     assert pkg_map["flask"] == "2.0.1"
     assert "jinja2" in pkg_map
     assert pkg_map["jinja2"] == "3.0.0"
-    # Unversioned or comments should not be parsed as versioned items
     assert "gunicorn" not in pkg_map
     assert all(p.ecosystem == "PyPI" for p in packages)
 
@@ -114,17 +113,14 @@ def test_vulnerability_extraction_helpers():
 
 @pytest.mark.anyio
 async def test_osv_batch_query_live_or_mock():
-    # Test OSV query with a historically known vulnerable version (e.g. requests 2.20.0)
     test_packages = [
         PackageItem(name="requests", version="2.20.0", ecosystem="PyPI", manifest_file="requirements.txt")
     ]
     try:
         findings = await query_osv_batch(test_packages)
-        # If internet is accessible, OSV should return known CVEs for requests 2.20.0
         assert len(findings) > 0
         assert any("CVE-" in f.osv_id or "GHSA-" in f.osv_id for f in findings)
         assert findings[0].package_name == "requests"
         assert findings[0].ecosystem == "PyPI"
     except Exception:
-        # In isolated environments without external network, pass gracefully
         pytest.skip("External network to api.osv.dev not reachable.")

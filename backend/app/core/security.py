@@ -7,7 +7,6 @@ from app.core.config import settings
 
 def get_password_hash(password: str) -> str:
     """Hash a password using bcrypt."""
-    # Bcrypt max password length is 72 bytes
     pwd_bytes = password.encode("utf-8")[:72]
     salt = bcrypt.gensalt(rounds=12)
     return bcrypt.hashpw(pwd_bytes, salt).decode("utf-8")

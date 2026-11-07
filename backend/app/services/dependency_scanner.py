@@ -7,7 +7,6 @@ import httpx
 
 OSV_BATCH_QUERY_URL = "https://api.osv.dev/v1/querybatch"
 
-# Manifest filenames recognized
 REQUIREMENTS_FILES = {"requirements.txt", "requirements-dev.txt", "requirements_prod.txt", "deps.txt"}
 PACKAGE_JSON = "package.json"
 PACKAGE_LOCK_JSON = "package-lock.json"
@@ -42,18 +41,15 @@ class DependencyFindingItem:
 def parse_requirements_txt(content: str, manifest_path: str) -> List[PackageItem]:
     """Parse Python requirements.txt lines into PackageItem instances."""
     packages: List[PackageItem] = []
-    # Pattern to match package name and version (e.g. requests==2.25.0, flask>=2.0.0, etc.)
     req_pattern = re.compile(
         r"^\s*([a-zA-Z0-9_\-\.]+)\s*(?:==|>=|<=|~=|>|<|=)?\s*([0-9a-zA-Z\.\-_+]+)?"
     )
 
     for raw_line in content.splitlines():
         line = raw_line.strip()
-        # Skip empty lines, comments, or pip options (-r, -i, etc.)
         if not line or line.startswith("#") or line.startswith("-") or line.startswith("--"):
             continue
 
-        # Strip environment markers (e.g. ; python_version >= '3.8')
         line = line.split(";")[0].strip()
 
         match = req_pattern.match(line)
@@ -61,7 +57,6 @@ def parse_requirements_txt(content: str, manifest_path: str) -> List[PackageItem
             pkg_name = match.group(1).strip()
             version = match.group(2).strip() if match.group(2) else ""
 
-            # Only query OSV if an exact or base version is specified
             if version:
                 packages.append(PackageItem(
                     name=pkg_name,
@@ -90,9 +85,7 @@ def parse_package_json(content: str, manifest_path: str) -> List[PackageItem]:
     for name, raw_version in all_deps.items():
         if not isinstance(raw_version, str):
             continue
-        # Clean semver operators (^, ~, >=, <=, =, v)
         clean_version = re.sub(r"^[\^~>=<v=]+", "", raw_version.strip())
-        # Skip urls, git hashes, or wildcard versions
         if not clean_version or clean_version == "*" or "/" in clean_version or ":" in clean_version:
             continue
 
@@ -114,12 +107,10 @@ def parse_package_lock_json(content: str, manifest_path: str) -> List[PackageIte
     except Exception:
         return packages
 
-    # Lockfile v2 / v3 packages mapping
     if "packages" in data and isinstance(data["packages"], dict):
         for pkg_key, pkg_info in data["packages"].items():
             if not pkg_key or not isinstance(pkg_info, dict):
                 continue
-            # package keys typically look like "node_modules/lodash" or "node_modules/@babel/core"
             if "node_modules/" in pkg_key:
                 name = pkg_key.split("node_modules/")[-1]
             else:
@@ -133,7 +124,6 @@ def parse_package_lock_json(content: str, manifest_path: str) -> List[PackageIte
                     ecosystem="npm",
                     manifest_file=manifest_path
                 ))
-    # Lockfile v1 dependencies mapping
     elif "dependencies" in data and isinstance(data["dependencies"], dict):
         for name, pkg_info in data["dependencies"].items():
             if isinstance(pkg_info, dict) and "version" in pkg_info:
@@ -169,13 +159,11 @@ def find_manifest_packages(base_dir: str) -> List[PackageItem]:
                         collected_packages.extend(parse_package_lock_json(f.read(), rel_path))
 
                 elif filename == PACKAGE_JSON and not has_lock:
-                    # Prefer package-lock.json if available; else fallback to package.json
                     with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
                         collected_packages.extend(parse_package_json(f.read(), rel_path))
             except Exception:
                 continue
 
-    # Deduplicate packages by (name, version, ecosystem)
     seen = set()
     unique_packages: List[PackageItem] = []
     for p in collected_packages:
@@ -203,14 +191,11 @@ def normalize_severity(vuln_data: dict) -> str:
         if "LOW" in sev_upper:
             return "LOW"
 
-    # Check for CVSS v3 score in severity array
     severities = vuln_data.get("severity") or []
     if isinstance(severities, list):
         for item in severities:
             score_str = item.get("score", "")
-            # Example CVSS string: CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H
             if "CVSS" in score_str:
-                # If score vector is provided, check high-impact vectors
                 if "/C:H/I:H/A:H" in score_str or "/C:H/I:H" in score_str:
                     return "CRITICAL"
                 elif "/C:H" in score_str or "/I:H" in score_str or "/A:H" in score_str:
@@ -246,7 +231,6 @@ async def query_osv_batch(packages: List[PackageItem]) -> List[DependencyFinding
         return []
 
     findings: List[DependencyFindingItem] = []
-    # OSV batch query limit is up to 1000 items per request, chunk in batches of 200
     chunk_size = 200
 
     async with httpx.AsyncClient(timeout=20.0) as client:
@@ -282,7 +266,6 @@ async def query_osv_batch(packages: List[PackageItem]) -> List[DependencyFinding
 
                     for vuln in vulns:
                         osv_id = vuln.get("id") or "UNKNOWN_VULN"
-                        # If aliases contain a CVE (e.g. CVE-2023-xxxx), pick it for readability if desired
                         aliases = vuln.get("aliases", [])
                         cve_id = next((a for a in aliases if a.startswith("CVE-")), osv_id)
 
@@ -303,7 +286,6 @@ async def query_osv_batch(packages: List[PackageItem]) -> List[DependencyFinding
                             advisory_url=advisory_url
                         ))
             except Exception:
-                # Network or OSV timeout failure: log or gracefully proceed
                 continue
 
     return findings

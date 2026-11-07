@@ -6,7 +6,7 @@ Proyecto desarrollado para la materia de **Seguridad Informática** (UP Chiapas)
 
 ---
 
-## 🚀 Arquitectura y Tecnologías
+## Arquitectura y Tecnologías
 
 - **Backend**: Python 3.12, FastAPI, Pydantic v2.
 - **Base de Datos**: PostgreSQL 16 (Docker Compose) con SQLAlchemy 2.0 (asíncrono con `asyncpg`) y migraciones automáticas con Alembic.
@@ -17,7 +17,7 @@ Proyecto desarrollado para la materia de **Seguridad Informática** (UP Chiapas)
 
 ---
 
-## 🛠️ Puesta en Marcha
+## Puesta en Marcha
 
 ### 1. Iniciar Base de Datos (PostgreSQL)
 Asegúrate de tener Docker Desktop activo y ejecuta:
@@ -36,7 +36,7 @@ $env:PYTHONPATH="backend"
 
 ---
 
-## 📦 Proyectos de Prueba Listos (Directorio `samples/`)
+## Proyectos de Prueba Listos (Directorio `samples/`)
 
 Para facilitar las pruebas sin necesidad de crear archivos manuales, se han generado 3 archivos ZIP listos para subir:
 
@@ -52,17 +52,10 @@ Para facilitar las pruebas sin necesidad de crear archivos manuales, se han gene
 
 ---
 
-## 🧪 Ejecución de Pruebas Automatizadas
+## Ejecución de Pruebas Automatizadas
 
 Para correr toda la suite de pruebas (14 tests de integración y unitarios):
 ```powershell
 $env:PYTHONPATH="backend"
 .\.venv\Scripts\pytest.exe backend\tests -v
 ```
-
----
-
-## 📄 Documento de Evidencia y Diseño
-
-El documento formal de diseño técnico y registro de evidencia se encuentra disponible en:
-- **Google Docs**: [KeyScanner - Especificación Técnica y Arquitectura](https://docs.google.com/document/d/1g5BMB_JmKbdHg6tZTDctExTFU8n8uxCyEvQloy8F1pU/edit)

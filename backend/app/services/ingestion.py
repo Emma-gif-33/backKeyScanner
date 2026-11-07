@@ -6,7 +6,6 @@ import zipfile
 from typing import List
 from fastapi import HTTPException, status
 
-# Safety Limits
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024       # 50 MB max zip upload
 MAX_UNCOMPRESSED_SIZE = 250 * 1024 * 1024 # 250 MB max extracted content
 MAX_FILES_COUNT = 5000                   # 5000 files max
@@ -35,7 +34,6 @@ def validate_and_inspect_zip(content: bytes) -> int:
             detail=f"File exceeds maximum allowed upload size of {MAX_UPLOAD_SIZE // (1024 * 1024)} MB."
         )
 
-    # Magic bytes check for ZIP (PK\x03\x04 or PK\x05\x06 for empty zips)
     if not (content.startswith(b"PK\x03\x04") or content.startswith(b"PK\x05\x06")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -60,7 +58,6 @@ def validate_and_inspect_zip(content: bytes) -> int:
                         detail="Zip bomb detected: uncompressed size exceeds maximum allowable limit."
                     )
 
-                # Zip Slip protection: check for path traversal
                 normalized = os.path.normpath(item.filename)
                 if normalized.startswith("..") or os.path.isabs(normalized):
                     raise HTTPException(
@@ -89,11 +86,9 @@ def extract_zip_safely(content: bytes, destination_dir: str) -> List[str]:
 
     with zipfile.ZipFile(io.BytesIO(content)) as zf:
         for member in zf.infolist():
-            # Skip directories
             if member.is_dir():
                 continue
 
-            # Ensure extraction target is strictly within destination_dir (Zip Slip barrier)
             target_path = os.path.abspath(os.path.join(canonical_dest, member.filename))
             if not target_path.startswith(canonical_dest + os.sep) and target_path != canonical_dest:
                 raise HTTPException(

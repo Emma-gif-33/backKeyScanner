@@ -72,13 +72,11 @@ async def upload_scan_archive(
             detail="Uploaded archive is empty."
         )
 
-    # 1. Validate archive integrity and security limits
     uncompressed_bytes = validate_and_inspect_zip(content)
     file_hash = compute_sha256(content)
 
     resolved_project_name = project_name.strip() if project_name and project_name.strip() else os.path.splitext(filename)[0]
 
-    # 2. Allocate isolated temporary workspace for this scan
     scan_id = uuid.uuid4()
     scan_workspace = os.path.join(TEMP_SCANS_BASE_DIR, str(scan_id), "extracted")
 
@@ -93,7 +91,6 @@ async def upload_scan_archive(
             detail=f"Failed to safely extract archive: {str(e)}"
         )
 
-    # 3. Create persistent record in PostgreSQL
     new_scan = Scan(
         id=scan_id,
         user_id=current_user.id,
@@ -114,7 +111,6 @@ async def upload_scan_archive(
     await db.commit()
     await db.refresh(new_scan)
 
-    # 4. Trigger full automated pipeline in background
     background_tasks.add_task(run_full_scan_pipeline, scan_id)
 
     return new_scan
@@ -181,7 +177,6 @@ async def get_scan_consolidated_report(
             detail="Scan not found or access denied."
         )
 
-    # Fetch secrets
     secrets_query = (
         select(SecretFinding)
         .where(SecretFinding.scan_id == scan_id)
@@ -190,7 +185,6 @@ async def get_scan_consolidated_report(
     secrets_res = await db.execute(secrets_query)
     secrets = list(secrets_res.scalars().all())
 
-    # Fetch dependencies
     deps_query = (
         select(DependencyFinding)
         .where(DependencyFinding.scan_id == scan_id)
@@ -265,10 +259,8 @@ async def execute_secret_scan(
             detail="Extracted workspace files not found for this scan."
         )
 
-    # Run secret detection engine
     raw_findings = scan_directory_for_secrets(scan_workspace)
 
-    # Purge any previous secret findings for clean update
     await db.execute(delete(SecretFinding).where(SecretFinding.scan_id == scan_id))
 
     db_findings: List[SecretFinding] = []
@@ -291,10 +283,8 @@ async def execute_secret_scan(
         db_findings.append(finding_record)
         db.add(finding_record)
 
-    # Update scan metrics
     scan.total_secrets = len(db_findings)
 
-    # Re-evaluate global risk combining secrets and dependencies
     dep_sev_res = await db.execute(select(DependencyFinding.severity).where(DependencyFinding.scan_id == scan_id))
     all_sevs = severities + list(dep_sev_res.scalars().all())
     scan.risk_level = calculate_risk_level(all_sevs)
@@ -357,10 +347,8 @@ async def execute_dependency_scan(
             detail="Extracted workspace files not found for this scan."
         )
 
-    # Run dependency scanner (query OSV API)
     raw_findings = await scan_directory_for_vulnerabilities(scan_workspace)
 
-    # Purge any previous dependency findings for clean update
     await db.execute(delete(DependencyFinding).where(DependencyFinding.scan_id == scan_id))
 
     db_findings: List[DependencyFinding] = []
@@ -384,10 +372,8 @@ async def execute_dependency_scan(
         db_findings.append(finding_record)
         db.add(finding_record)
 
-    # Update scan metrics
     scan.total_vulnerabilities = len(db_findings)
 
-    # Re-evaluate global risk combining secrets and dependencies
     sec_sev_res = await db.execute(select(SecretFinding.severity).where(SecretFinding.scan_id == scan_id))
     all_sevs = severities + list(sec_sev_res.scalars().all())
     scan.risk_level = calculate_risk_level(all_sevs)
@@ -443,7 +429,6 @@ async def delete_scan(
             detail="Scan not found or access denied."
         )
 
-    # Delete workspace directory
     scan_dir = os.path.join(TEMP_SCANS_BASE_DIR, str(scan_id))
     cleanup_directory(scan_dir)
 

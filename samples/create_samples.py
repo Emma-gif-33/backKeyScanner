@@ -6,7 +6,6 @@ SAMPLES_DIR = os.path.dirname(os.path.abspath(__file__))
 def create_samples():
     os.makedirs(SAMPLES_DIR, exist_ok=True)
 
-    # 1. Demo Node.js Project with Vulnerabilities
     node_zip_path = os.path.join(SAMPLES_DIR, "demo_node_project.zip")
     with zipfile.ZipFile(node_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(
@@ -43,7 +42,6 @@ console.log("App starting with token:", GITHUB_PAT);
 """
         )
 
-    # 2. Demo Python Project with Vulnerabilities
     python_zip_path = os.path.join(SAMPLES_DIR, "demo_python_project.zip")
     with zipfile.ZipFile(python_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(
@@ -77,7 +75,6 @@ if __name__ == "__main__":
 """
         )
 
-    # 3. Demo Clean Project (0 vulnerabilities, 0 secrets)
     clean_zip_path = os.path.join(SAMPLES_DIR, "demo_clean_project.zip")
     with zipfile.ZipFile(clean_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(

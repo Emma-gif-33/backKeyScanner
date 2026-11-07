@@ -83,7 +83,6 @@ class Scan(Base):
         nullable=False
     )
 
-    # Relationships
     user: Mapped["User"] = relationship(
         "User",
         back_populates="scans"

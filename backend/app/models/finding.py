@@ -65,7 +65,6 @@ class SecretFinding(Base):
         nullable=False
     )
 
-    # Relationships
     scan: Mapped["Scan"] = relationship(
         "Scan",
         back_populates="secret_findings"
@@ -136,7 +135,6 @@ class DependencyFinding(Base):
         nullable=False
     )
 
-    # Relationships
     scan: Mapped["Scan"] = relationship(
         "Scan",
         back_populates="dependency_findings"

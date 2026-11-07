@@ -15,7 +15,6 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# CORS configuration for Frontend (React + Vite)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -41,6 +40,4 @@ async def health_check(db: AsyncSession = Depends(get_db)):
         "database": db_status
     }
 
-
-# Mount API V1 routes
 app.include_router(api_v1_router, prefix=settings.API_V1_STR)

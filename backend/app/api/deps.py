@@ -10,7 +10,6 @@ from app.core.database import get_db
 from app.core.security import decode_access_token
 from app.models.user import User
 
-# OAuth2 scheme for Swagger UI Authorization button
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl=f"{settings.API_V1_STR}/auth/login"
 )
@@ -40,7 +39,6 @@ async def get_current_user(
     except ValueError:
         raise credentials_exception
 
-    # Query user from PostgreSQL
     result = await db.execute(select(User).where(User.id == user_uuid))
     user = result.scalar_one_or_none()
 

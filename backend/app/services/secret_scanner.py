@@ -5,7 +5,6 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import List, Optional
 
-# File & Directory Filter Settings
 EXCLUDED_DIRECTORIES = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".idea",
     ".vscode", "dist", "build", ".pytest_cache", ".tox", "coverage", ".next"
@@ -63,7 +62,6 @@ def create_masked_snippet(line: str, secret: str) -> str:
     return line.replace(secret, masked).strip()
 
 
-# Regex Rules Definitions
 RULES = [
     {
         "id": "AWS_ACCESS_KEY",
@@ -137,7 +135,6 @@ RULES = [
     }
 ]
 
-# Quoted assignment detector for entropy evaluation
 QUOTED_ASSIGNMENT_REGEX = re.compile(r"[:=]\s*['\"]([^'\"\s]{16,128})['\"]")
 ENTROPY_CANDIDATE_REGEX = re.compile(r"\b([a-zA-Z0-9+/=_-]{20,80})\b")
 UUID_REGEX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
@@ -156,12 +153,11 @@ def scan_file_content(file_path: str, relative_path: str) -> List[SecretFindingI
 
     for line_idx, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
-        if not line or len(line) > 2000:  # Skip empty or minified huge lines
+        if not line or len(line) > 2000: 
             continue
 
         matched_spans = set()
 
-        # 1. RegEx matching for known provider patterns
         for rule in RULES:
             for match in rule["pattern"].finditer(line):
                 secret = match.group(1) if match.groups() else match.group(0)
@@ -186,14 +182,11 @@ def scan_file_content(file_path: str, relative_path: str) -> List[SecretFindingI
                     remediation_tip=rule["tip"]
                 ))
 
-        # 2. Shannon Entropy analysis for high-randomness secrets in assignments or tokens
-        # Check quoted assignments (e.g. token = "...", password = "...")
         quoted_matches = list(QUOTED_ASSIGNMENT_REGEX.finditer(line))
         candidate_items = []
         for qm in quoted_matches:
             candidate_items.append((qm.group(1), qm.span(1)))
 
-        # Also check word candidates if keyword is present on the line
         if any(kw in line.lower() for kw in ("key", "token", "secret", "pass", "cred", "auth", "pwd")):
             for em in ENTROPY_CANDIDATE_REGEX.finditer(line):
                 candidate_items.append((em.group(1), em.span(1)))
@@ -202,12 +195,10 @@ def scan_file_content(file_path: str, relative_path: str) -> List[SecretFindingI
             if span in matched_spans:
                 continue
 
-            # Ignore UUIDs and Git commit hashes
             if UUID_REGEX.match(candidate) or HEX_COMMIT_REGEX.match(candidate):
                 continue
 
             entropy = calculate_shannon_entropy(candidate)
-            # High entropy threshold for generic secrets
             if entropy >= 4.1:
                 matched_spans.add(span)
                 findings.append(SecretFindingItem(
@@ -229,7 +220,6 @@ def scan_directory_for_secrets(base_dir: str) -> List[SecretFindingItem]:
     all_findings: List[SecretFindingItem] = []
 
     for root, dirs, files in os.walk(base_dir):
-        # Exclude directories in-place
         dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRECTORIES and not d.startswith(".")]
 
         for filename in files:
@@ -239,7 +229,6 @@ def scan_directory_for_secrets(base_dir: str) -> List[SecretFindingItem]:
 
             full_path = os.path.join(root, filename)
 
-            # Check file size limit
             try:
                 if os.path.getsize(full_path) > MAX_FILE_SIZE_BYTES:
                     continue

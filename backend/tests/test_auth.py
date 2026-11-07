@@ -5,14 +5,12 @@ from app.main import app
 
 @pytest.mark.anyio
 async def test_full_auth_flow():
-    # Use a random unique email for test isolation
     unique_email = f"test_{uuid.uuid4().hex[:8]}@example.com"
     password = "SuperSecurePassword123"
     full_name = "Emma Test User"
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1. Register a new user
         reg_response = await client.post(
             "/api/v1/auth/register",
             json={
@@ -30,7 +28,6 @@ async def test_full_auth_flow():
         assert "password" not in user_data
         assert "hashed_password" not in user_data
 
-        # 2. Duplicate email should return 400
         dup_response = await client.post(
             "/api/v1/auth/register",
             json={
@@ -40,7 +37,6 @@ async def test_full_auth_flow():
         )
         assert dup_response.status_code == 400
 
-        # 3. Login with invalid password should return 401
         bad_login = await client.post(
             "/api/v1/auth/login/json",
             json={
@@ -50,7 +46,6 @@ async def test_full_auth_flow():
         )
         assert bad_login.status_code == 401
 
-        # 4. Login via JSON (Frontend style)
         login_json_resp = await client.post(
             "/api/v1/auth/login/json",
             json={
@@ -64,7 +59,6 @@ async def test_full_auth_flow():
         assert token_data["token_type"] == "bearer"
         token = token_data["access_token"]
 
-        # 5. Login via OAuth2 Form data (Swagger UI style)
         login_form_resp = await client.post(
             "/api/v1/auth/login",
             data={
@@ -75,11 +69,9 @@ async def test_full_auth_flow():
         assert login_form_resp.status_code == 200
         assert "access_token" in login_form_resp.json()
 
-        # 6. Access protected route /me without token should return 401
         no_auth_resp = await client.get("/api/v1/auth/me")
         assert no_auth_resp.status_code == 401
 
-        # 7. Access protected route /me with valid Bearer token
         me_resp = await client.get(
             "/api/v1/auth/me",
             headers={"Authorization": f"Bearer {token}"}

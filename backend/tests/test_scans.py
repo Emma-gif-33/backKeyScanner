@@ -18,13 +18,11 @@ def create_mock_zip(files_dict: dict[str, str]) -> bytes:
 
 @pytest.mark.anyio
 async def test_scans_ingestion_and_secret_scanning_flow():
-    # 1. Setup authenticated user
     user_email = f"scanuser_{uuid.uuid4().hex[:8]}@example.com"
     password = "SecurePassword123!"
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        # Register and login
         await client.post(
             "/api/v1/auth/register",
             json={"email": user_email, "password": password, "full_name": "Scanner Test"}
@@ -36,7 +34,6 @@ async def test_scans_ingestion_and_secret_scanning_flow():
         token = login_res.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
 
-        # 2. Upload zip containing exposed secrets and vulnerable dependency
         mock_zip_bytes = create_mock_zip({
             "src/settings.py": 'AWS_ACCESS = "AKIA1234567890EXAMPL"\nDB_URL = "postgres://root:SuperSecret123@db:5432/app"',
             "config/keys.json": '{\n  "github_token": "ghp_1234567890abcdefghijklmnopqrstuvwxyz"\n}',
@@ -57,7 +54,6 @@ async def test_scans_ingestion_and_secret_scanning_flow():
         assert scan_data["total_vulnerabilities"] == 0
         assert scan_data["risk_level"] == "NONE"
 
-        # 3. Trigger secret scan
         scan_secrets_res = await client.post(
             f"/api/v1/scans/{scan_id}/scan-secrets",
             headers=headers
@@ -71,13 +67,11 @@ async def test_scans_ingestion_and_secret_scanning_flow():
         assert "GITHUB_PAT" in detected_rules
         assert "DATABASE_URI_PASSWORD" in detected_rules
 
-        # Ensure all findings are masked and have tips
         for f in findings:
             assert "*" in f["masked_snippet"]
             assert f["remediation_tip"] is not None
             assert f["scan_id"] == scan_id
 
-        # 4. Trigger dependency audit (OSV.dev)
         try:
             dep_res = await client.post(
                 f"/api/v1/scans/{scan_id}/scan-dependencies",
@@ -90,21 +84,18 @@ async def test_scans_ingestion_and_secret_scanning_flow():
                 assert dep_findings[0]["ecosystem"] == "PyPI"
                 assert dep_findings[0]["manifest_file"] == "requirements.txt"
 
-                # Check query dependencies endpoint
                 stored_deps = await client.get(f"/api/v1/scans/{scan_id}/dependencies", headers=headers)
                 assert stored_deps.status_code == 200
                 assert len(stored_deps.json()) == len(dep_findings)
         except Exception:
-            pass  # If OSV is offline, continue test
+            pass  
 
-        # 5. Check updated scan details (total_secrets and risk_level)
         updated_scan = await client.get(f"/api/v1/scans/{scan_id}", headers=headers)
         assert updated_scan.status_code == 200
         scan_info = updated_scan.json()
         assert scan_info["total_secrets"] >= 3
         assert scan_info["risk_level"] in ("HIGH", "CRITICAL")
 
-        # 6. Reject Zip Slip path traversal attack
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as zf:
             zf.writestr("../../etc/passwd", "root:x:0:0:")
@@ -118,6 +109,5 @@ async def test_scans_ingestion_and_secret_scanning_flow():
         )
         assert slip_res.status_code == 400
 
-        # 7. Cleanup / Delete scan
         del_res = await client.delete(f"/api/v1/scans/{scan_id}", headers=headers)
         assert del_res.status_code == 204

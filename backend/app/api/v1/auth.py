@@ -25,7 +25,6 @@ async def register(
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
     """Create a new user account with hashed password."""
-    # Check if user already exists
     existing_user = await db.execute(select(User).where(User.email == user_in.email))
     if existing_user.scalar_one_or_none():
         raise HTTPException(
@@ -33,7 +32,6 @@ async def register(
             detail="A user with this email already exists."
         )
 
-    # Hash password and persist user
     new_user = User(
         email=user_in.email,
         hashed_password=get_password_hash(user_in.password),

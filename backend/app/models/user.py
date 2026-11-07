@@ -50,7 +50,6 @@ class User(Base):
         nullable=False
     )
 
-    # Relationships
     scans: Mapped[List["Scan"]] = relationship(
         "Scan",
         back_populates="user",

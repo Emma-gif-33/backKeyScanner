@@ -32,7 +32,6 @@ async def run_full_scan_pipeline(scan_id: uuid.UUID) -> None:
     """Orchestrate background execution of the full audit pipeline for a scan."""
     async with AsyncSessionLocal() as db:
         try:
-            # 1. Fetch scan and mark as PROCESSING
             query = select(Scan).where(Scan.id == scan_id)
             result = await db.execute(query)
             scan = result.scalar_one_or_none()
@@ -52,10 +51,8 @@ async def run_full_scan_pipeline(scan_id: uuid.UUID) -> None:
                 await db.commit()
                 return
 
-            # 2. Execute Secret Detection
             raw_secrets = scan_directory_for_secrets(workspace_dir)
 
-            # Clean previous secret findings if any
             await db.execute(delete(SecretFinding).where(SecretFinding.scan_id == scan_id))
             secret_entities: List[SecretFinding] = []
             for s in raw_secrets:
@@ -73,10 +70,8 @@ async def run_full_scan_pipeline(scan_id: uuid.UUID) -> None:
                 ))
             db.add_all(secret_entities)
 
-            # 3. Execute Dependency Audit via OSV.dev
             raw_deps = await scan_directory_for_vulnerabilities(workspace_dir)
 
-            # Clean previous dependency findings if any
             await db.execute(delete(DependencyFinding).where(DependencyFinding.scan_id == scan_id))
             dep_entities: List[DependencyFinding] = []
             for d in raw_deps:
@@ -95,7 +90,6 @@ async def run_full_scan_pipeline(scan_id: uuid.UUID) -> None:
                 ))
             db.add_all(dep_entities)
 
-            # 4. Compute Metrics & Aggregations
             finished_at = datetime.now(timezone.utc)
             duration_sec = (finished_at - scan.started_at).total_seconds()
 
@@ -123,7 +117,6 @@ async def run_full_scan_pipeline(scan_id: uuid.UUID) -> None:
                 }
             }
 
-            # 5. Finalize Scan Record in PostgreSQL
             scan.status = "COMPLETED"
             scan.total_secrets = len(secret_entities)
             scan.total_vulnerabilities = len(dep_entities)
@@ -136,7 +129,6 @@ async def run_full_scan_pipeline(scan_id: uuid.UUID) -> None:
         except Exception as e:
             await db.rollback()
             try:
-                # Refresh and set FAILED
                 query = select(Scan).where(Scan.id == scan_id)
                 res = await db.execute(query)
                 scan = res.scalar_one_or_none()
