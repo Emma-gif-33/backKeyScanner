@@ -1,60 +1,63 @@
 import os
 import uuid
 from typing import Annotated, List, Optional
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+    status,
+)
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.core.database import get_db
-from app.models.finding import SecretFinding
+from app.models.finding import DependencyFinding, SecretFinding
 from app.models.scan import Scan
 from app.models.user import User
-from app.schemas.finding import SecretFindingResponse
-from app.schemas.scan import ScanListResponse, ScanResponse
+from app.schemas.finding import DependencyFindingResponse, SecretFindingResponse
+from app.schemas.scan import (
+    CategoryBreakdown,
+    ReportSummary,
+    ScanListResponse,
+    ScanReportResponse,
+    ScanResponse,
+    SeverityBreakdown,
+)
+from app.services.dependency_scanner import scan_directory_for_vulnerabilities
 from app.services.ingestion import (
     cleanup_directory,
     compute_sha256,
     extract_zip_safely,
     validate_and_inspect_zip,
 )
+from app.services.scanner_pipeline import calculate_risk_level, run_full_scan_pipeline
 from app.services.secret_scanner import scan_directory_for_secrets
 
 router = APIRouter()
 
-TEMP_SCANS_BASE_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "temp_scans"
-)
-
-SEVERITY_ORDER = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "NONE": 0}
-
-
-def calculate_risk_level(findings_severities: List[str]) -> str:
-    """Determine highest risk level from a list of finding severities."""
-    highest_score = 0
-    highest_severity = "NONE"
-    for sev in findings_severities:
-        score = SEVERITY_ORDER.get(sev.upper(), 0)
-        if score > highest_score:
-            highest_score = score
-            highest_severity = sev.upper()
-    return highest_severity
+TEMP_SCANS_BASE_DIR = settings.TEMP_SCANS_BASE_DIR
 
 
 @router.post(
     "/upload",
     response_model=ScanResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Upload and ingest a zip archive for auditing"
+    summary="Upload and ingest a zip archive, launching automated audit in background"
 )
 async def upload_scan_archive(
     file: Annotated[UploadFile, File(description="Zip archive containing project source code")],
+    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
     project_name: Annotated[Optional[str], Form(description="Custom project name")] = None,
 ):
-    """Upload a project in .zip format, perform security validation and register in queue."""
+    """Upload project archive, extract safely, register in queue and trigger background scan pipeline."""
     filename = file.filename or "project.zip"
     if not filename.lower().endswith(".zip"):
         raise HTTPException(
@@ -111,6 +114,9 @@ async def upload_scan_archive(
     await db.commit()
     await db.refresh(new_scan)
 
+    # 4. Trigger full automated pipeline in background
+    background_tasks.add_task(run_full_scan_pipeline, scan_id)
+
     return new_scan
 
 
@@ -154,6 +160,83 @@ async def get_scan_detail(
     return scan
 
 
+@router.get(
+    "/{scan_id}/report",
+    response_model=ScanReportResponse,
+    summary="Get consolidated audit report for a completed scan"
+)
+async def get_scan_consolidated_report(
+    scan_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    """Return consolidated report including executive summary, metrics, secrets and CVEs."""
+    query = select(Scan).where(Scan.id == scan_id, Scan.user_id == current_user.id)
+    result = await db.execute(query)
+    scan = result.scalar_one_or_none()
+
+    if not scan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scan not found or access denied."
+        )
+
+    # Fetch secrets
+    secrets_query = (
+        select(SecretFinding)
+        .where(SecretFinding.scan_id == scan_id)
+        .order_by(SecretFinding.severity.desc(), SecretFinding.created_at.asc())
+    )
+    secrets_res = await db.execute(secrets_query)
+    secrets = list(secrets_res.scalars().all())
+
+    # Fetch dependencies
+    deps_query = (
+        select(DependencyFinding)
+        .where(DependencyFinding.scan_id == scan_id)
+        .order_by(DependencyFinding.severity.desc(), DependencyFinding.created_at.asc())
+    )
+    deps_res = await db.execute(deps_query)
+    dependencies = list(deps_res.scalars().all())
+
+    metrics = scan.summary_metrics or {}
+    by_sev_raw = metrics.get("by_severity", {})
+    by_cat_raw = metrics.get("by_category", {})
+
+    summary = ReportSummary(
+        total_findings=len(secrets) + len(dependencies),
+        risk_level=scan.risk_level,
+        by_severity=SeverityBreakdown(
+            critical=by_sev_raw.get("critical", 0),
+            high=by_sev_raw.get("high", 0),
+            medium=by_sev_raw.get("medium", 0),
+            low=by_sev_raw.get("low", 0),
+        ),
+        by_category=CategoryBreakdown(
+            secrets=by_cat_raw.get("secrets", len(secrets)),
+            dependencies=by_cat_raw.get("dependencies", len(dependencies)),
+        ),
+        duration_seconds=metrics.get("duration_seconds"),
+        files_extracted=metrics.get("files_extracted", 0),
+    )
+
+    return ScanReportResponse(
+        scan_id=scan.id,
+        project_name=scan.project_name,
+        source_filename=scan.source_filename,
+        file_hash_sha256=scan.file_hash_sha256,
+        status=scan.status,
+        risk_level=scan.risk_level,
+        created_at=scan.created_at,
+        started_at=scan.started_at,
+        finished_at=scan.finished_at,
+        error_message=scan.error_message,
+        summary=summary,
+        secrets=secrets,
+        dependencies=dependencies,
+    )
+
+
 @router.post(
     "/{scan_id}/scan-secrets",
     response_model=List[SecretFindingResponse],
@@ -182,7 +265,7 @@ async def execute_secret_scan(
             detail="Extracted workspace files not found for this scan."
         )
 
-    # Run the secret detection engine
+    # Run secret detection engine
     raw_findings = scan_directory_for_secrets(scan_workspace)
 
     # Purge any previous secret findings for clean update
@@ -210,9 +293,13 @@ async def execute_secret_scan(
 
     # Update scan metrics
     scan.total_secrets = len(db_findings)
-    scan.risk_level = calculate_risk_level(severities)
-    await db.commit()
 
+    # Re-evaluate global risk combining secrets and dependencies
+    dep_sev_res = await db.execute(select(DependencyFinding.severity).where(DependencyFinding.scan_id == scan_id))
+    all_sevs = severities + list(dep_sev_res.scalars().all())
+    scan.risk_level = calculate_risk_level(all_sevs)
+
+    await db.commit()
     return db_findings
 
 
@@ -238,6 +325,99 @@ async def get_scan_secret_findings(
         )
 
     findings_query = select(SecretFinding).where(SecretFinding.scan_id == scan_id).order_by(SecretFinding.created_at.asc())
+    findings_result = await db.execute(findings_query)
+    return list(findings_result.scalars().all())
+
+
+@router.post(
+    "/{scan_id}/scan-dependencies",
+    response_model=List[DependencyFindingResponse],
+    summary="Run dependency vulnerability audit via OSV.dev"
+)
+async def execute_dependency_scan(
+    scan_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    """Audit project packages against OSV database and persist CVEs in PostgreSQL."""
+    query = select(Scan).where(Scan.id == scan_id, Scan.user_id == current_user.id)
+    result = await db.execute(query)
+    scan = result.scalar_one_or_none()
+
+    if not scan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scan not found or access denied."
+        )
+
+    scan_workspace = os.path.join(TEMP_SCANS_BASE_DIR, str(scan_id), "extracted")
+    if not os.path.exists(scan_workspace):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Extracted workspace files not found for this scan."
+        )
+
+    # Run dependency scanner (query OSV API)
+    raw_findings = await scan_directory_for_vulnerabilities(scan_workspace)
+
+    # Purge any previous dependency findings for clean update
+    await db.execute(delete(DependencyFinding).where(DependencyFinding.scan_id == scan_id))
+
+    db_findings: List[DependencyFinding] = []
+    severities: List[str] = []
+
+    for item in raw_findings:
+        severities.append(item.severity)
+        finding_record = DependencyFinding(
+            id=uuid.uuid4(),
+            scan_id=scan_id,
+            package_name=item.package_name,
+            installed_version=item.installed_version,
+            ecosystem=item.ecosystem,
+            manifest_file=item.manifest_file,
+            osv_id=item.osv_id,
+            severity=item.severity,
+            fixed_version=item.fixed_version,
+            summary=item.summary,
+            advisory_url=item.advisory_url
+        )
+        db_findings.append(finding_record)
+        db.add(finding_record)
+
+    # Update scan metrics
+    scan.total_vulnerabilities = len(db_findings)
+
+    # Re-evaluate global risk combining secrets and dependencies
+    sec_sev_res = await db.execute(select(SecretFinding.severity).where(SecretFinding.scan_id == scan_id))
+    all_sevs = severities + list(sec_sev_res.scalars().all())
+    scan.risk_level = calculate_risk_level(all_sevs)
+
+    await db.commit()
+    return db_findings
+
+
+@router.get(
+    "/{scan_id}/dependencies",
+    response_model=List[DependencyFindingResponse],
+    summary="Get all dependency vulnerabilities detected in a scan"
+)
+async def get_scan_dependency_findings(
+    scan_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    """Retrieve all dependency vulnerabilities discovered during the scan."""
+    query = select(Scan).where(Scan.id == scan_id, Scan.user_id == current_user.id)
+    result = await db.execute(query)
+    scan = result.scalar_one_or_none()
+
+    if not scan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scan not found or access denied."
+        )
+
+    findings_query = select(DependencyFinding).where(DependencyFinding.scan_id == scan_id).order_by(DependencyFinding.created_at.asc())
     findings_result = await db.execute(findings_query)
     return list(findings_result.scalars().all())
 
