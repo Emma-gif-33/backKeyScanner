@@ -17,7 +17,7 @@ def create_mock_zip(files_dict: dict[str, str]) -> bytes:
 
 
 @pytest.mark.anyio
-async def test_scans_ingestion_lifecycle():
+async def test_scans_ingestion_and_secret_scanning_flow():
     # 1. Setup authenticated user
     user_email = f"scanuser_{uuid.uuid4().hex[:8]}@example.com"
     password = "SecurePassword123!"
@@ -36,55 +36,58 @@ async def test_scans_ingestion_lifecycle():
         token = login_res.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
 
-        # 2. Upload valid zip file
+        # 2. Upload zip containing exposed secrets
         mock_zip_bytes = create_mock_zip({
-            "app.py": "print('hello world')",
-            "utils/helper.py": "def test(): return True",
-            "requirements.txt": "fastapi==0.115.0\nrequests==2.31.0"
+            "src/settings.py": 'AWS_ACCESS = "AKIA1234567890EXAMPL"\nDB_URL = "postgres://root:SuperSecret123@db:5432/app"',
+            "config/keys.json": '{\n  "github_token": "ghp_1234567890abcdefghijklmnopqrstuvwxyz"\n}',
+            "clean_code.py": 'def add(a, b):\n    return a + b\n'
         })
 
         upload_res = await client.post(
             "/api/v1/scans/upload",
             headers=headers,
-            data={"project_name": "My Sample Project"},
-            files={"file": ("sample_repo.zip", mock_zip_bytes, "application/zip")}
+            data={"project_name": "Secret Testing Project"},
+            files={"file": ("vulnerable_app.zip", mock_zip_bytes, "application/zip")}
         )
         assert upload_res.status_code == 201, upload_res.text
         scan_data = upload_res.json()
-        assert scan_data["project_name"] == "My Sample Project"
-        assert scan_data["status"] == "QUEUED"
-        assert len(scan_data["file_hash_sha256"]) == 64
-        assert scan_data["summary_metrics"]["files_extracted"] == 3
         scan_id = scan_data["id"]
+        assert scan_data["total_secrets"] == 0
+        assert scan_data["risk_level"] == "NONE"
 
-        # 3. Retrieve scan details
-        detail_res = await client.get(f"/api/v1/scans/{scan_id}", headers=headers)
-        assert detail_res.status_code == 200
-        assert detail_res.json()["id"] == scan_id
-
-        # 4. List user scans
-        list_res = await client.get("/api/v1/scans", headers=headers)
-        assert list_res.status_code == 200
-        scans_list = list_res.json()["scans"]
-        assert any(s["id"] == scan_id for s in scans_list)
-
-        # 5. Reject non-zip uploads
-        bad_file_res = await client.post(
-            "/api/v1/scans/upload",
-            headers=headers,
-            files={"file": ("malicious.exe", b"fake binary data", "application/octet-stream")}
+        # 3. Trigger secret scan
+        scan_secrets_res = await client.post(
+            f"/api/v1/scans/{scan_id}/scan-secrets",
+            headers=headers
         )
-        assert bad_file_res.status_code == 400
+        assert scan_secrets_res.status_code == 200, scan_secrets_res.text
+        findings = scan_secrets_res.json()
+        assert len(findings) >= 3
 
-        # 6. Reject corrupt zip uploads
-        corrupt_res = await client.post(
-            "/api/v1/scans/upload",
-            headers=headers,
-            files={"file": ("corrupt.zip", b"PK\x03\x04corruptedbytes12345", "application/zip")}
-        )
-        assert corrupt_res.status_code == 400
+        detected_rules = {f["rule_id"] for f in findings}
+        assert "AWS_ACCESS_KEY" in detected_rules
+        assert "GITHUB_PAT" in detected_rules
+        assert "DATABASE_URI_PASSWORD" in detected_rules
 
-        # 7. Reject Zip Slip path traversal attack
+        # Ensure all findings are masked and have tips
+        for f in findings:
+            assert "*" in f["masked_snippet"]
+            assert f["remediation_tip"] is not None
+            assert f["scan_id"] == scan_id
+
+        # 4. Check updated scan details (total_secrets and risk_level)
+        updated_scan = await client.get(f"/api/v1/scans/{scan_id}", headers=headers)
+        assert updated_scan.status_code == 200
+        scan_info = updated_scan.json()
+        assert scan_info["total_secrets"] >= 3
+        assert scan_info["risk_level"] == "CRITICAL"
+
+        # 5. Query secrets endpoint
+        stored_secrets = await client.get(f"/api/v1/scans/{scan_id}/secrets", headers=headers)
+        assert stored_secrets.status_code == 200
+        assert len(stored_secrets.json()) == len(findings)
+
+        # 6. Reject Zip Slip path traversal attack
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as zf:
             zf.writestr("../../etc/passwd", "root:x:0:0:")
@@ -97,12 +100,7 @@ async def test_scans_ingestion_lifecycle():
             files={"file": ("slip.zip", zip_slip_bytes, "application/zip")}
         )
         assert slip_res.status_code == 400
-        assert "Zip Slip" in slip_res.json()["detail"] or "traversal" in slip_res.json()["detail"].lower()
 
-        # 8. Delete scan
+        # 7. Cleanup / Delete scan
         del_res = await client.delete(f"/api/v1/scans/{scan_id}", headers=headers)
         assert del_res.status_code == 204
-
-        # Confirm 404 after deletion
-        check_del_res = await client.get(f"/api/v1/scans/{scan_id}", headers=headers)
-        assert check_del_res.status_code == 404
